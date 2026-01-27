@@ -48,9 +48,8 @@ function AppContent() {
     // Don't set loading to true on refetch, to avoid screen flicker
     setError(null);
     try {
-      if (SCRIPT_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL') {
-        throw new Error('請在 App.tsx 中設定您的 Google Apps Script 網址。');
-      }
+      // FIX: The check for a placeholder URL was removed as `SCRIPT_URL` is already defined.
+      // This comparison was causing a compile-time error because it would always evaluate to false.
       const response = await fetch(SCRIPT_URL);
       if (!response.ok) {
         throw new Error('無法從後端讀取資料，請檢查 Apps Script 部署設定。');
