@@ -11,7 +11,7 @@ import { SYSTEM_MODULES } from './constants';
 // !!! =============================================================== !!!
 // !!!  請將 'YOUR_GOOGLE_APPS_SCRIPT_URL' 換成您部署後取得的網址   !!!
 // !!! =============================================================== !!!
-const SCRIPT_URL = 'YOUR_GOOGLE_APPS_SCRIPT_URL';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwTPrdM50vzsly8XnHdEdjT2jY7_9Uzbq2JW-cv5rS90osJdg77snNs4WJ3zImJfeX-/exec';
 
 // Helper function for API calls
 async function postToAction(action: string, payload: any) {
