@@ -1,0 +1,5 @@
+{
+  "name": "BML Feedback System",
+  "description": "A comprehensive frontend feedback management system for the BML Laboratory, featuring issue tracking, categorization, and developer response workflows.",
+  "requestFramePermissions": []
+}
