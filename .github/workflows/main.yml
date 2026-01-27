@@ -1,22 +1,49 @@
+# .github/workflows/deploy.yml
+
 name: Deploy to GitHub Pages
 
 on:
+  # 當有程式碼推送到 main 分支時觸發
   push:
-    branches:
-      - main # 當 main 分支有更新時觸發
+    branches: ["main"]
 
+  # 允許您從 Actions 分頁手動觸發此工作流程
+  workflow_dispatch:
+
+# 設定 GITHUB_TOKEN 的權限以允許部署到 GitHub Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# 只允許一個並行的部署，避免部署衝突
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
-  build-and-deploy:
+  # Build job: 負責建置與打包網站檔案
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 🛎️
         uses: actions/checkout@v4
-
-      # 因為我們的專案沒有傳統的 build 步驟，所以直接部署
-      - name: Deploy 🚀
+      - name: Setup Pages ⚙️
+        uses: actions/configure-pages@v5
+      - name: Upload artifact 📦
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # 將整個專案目錄上傳為成品
+          path: '.'
+      
+  # Deploy job: 負責部署打包好的成品
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build # 這個部署任務需要等待 'build' 任務成功完成
+    steps:
+      - name: Deploy to GitHub Pages 🚀
+        id: deployment
         uses: actions/deploy-pages@v4
