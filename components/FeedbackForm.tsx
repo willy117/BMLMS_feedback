@@ -99,6 +99,15 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
     e.preventDefault();
     if (!userName.trim() || !description.trim() || isSubmitting || isProcessingImages) return;
 
+    // 關鍵修正：在傳送給後端前，移除 Base64 的標頭 (data:image/jpeg;base64,)
+    // 這能避免 Google Apps Script 的 Utilities.base64Decode 發生錯誤
+    const processedImages = images.map(img => {
+      if (img.includes(',')) {
+        return img.split(',')[1];
+      }
+      return img;
+    });
+
     const success = await onSubmit({
       userName,
       category,
@@ -106,7 +115,7 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
       moduleName: currentModule.name,
       featureName: selectedFeature,
       description,
-      imageUrls: images,
+      imageUrls: processedImages,
     });
 
     if (success) {

@@ -69,6 +69,15 @@ const compressImage = (file: File): Promise<string> => {
   });
 };
 
+// 處理圖片連結：如果是純 Base64 (沒有 Header)，補上 Header 讓它能顯示
+const resolveImageUrl = (url: string) => {
+  if (!url) return '';
+  if (url.startsWith('http') || url.startsWith('https')) return url;
+  if (url.startsWith('data:')) return url;
+  // 假設沒有標頭的是 JPEG (因為我們的壓縮器輸出 JPEG)
+  return `data:image/jpeg;base64,${url}`;
+};
+
 // Reusable Image Thumbnails Component
 const ImageThumbnails = ({ urls }: { urls?: string[] }) => {
   if (!urls || urls.length === 0) return null;
@@ -76,8 +85,8 @@ const ImageThumbnails = ({ urls }: { urls?: string[] }) => {
   return (
     <div className="mt-3 flex items-center gap-2 flex-wrap">
       {urls.map((url, index) => (
-        <a key={index} href={url} target="_blank" rel="noopener noreferrer" className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:ring-2 hover:ring-blue-500 transition-all">
-          <img src={url} alt={`attachment-${index}`} className="w-full h-full object-cover" />
+        <a key={index} href={resolveImageUrl(url)} target="_blank" rel="noopener noreferrer" className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:ring-2 hover:ring-blue-500 transition-all">
+          <img src={resolveImageUrl(url)} alt={`attachment-${index}`} className="w-full h-full object-cover" />
         </a>
       ))}
     </div>
@@ -162,10 +171,19 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
     e.preventDefault();
     if (!commentName.trim() || !commentContent.trim() || isSubmittingComment || isProcessingCommentImages) return;
     setIsSubmittingComment(true);
+
+    // 關鍵修正：移除 Base64 標頭
+    const processedImages = commentImages.map(img => {
+      if (img.includes(',')) {
+        return img.split(',')[1];
+      }
+      return img;
+    });
+
     const success = await onAddComment(item.id, { 
       userName: commentName, 
       content: commentContent, 
-      imageUrls: commentImages 
+      imageUrls: processedImages 
     });
     if (success) {
       setCommentContent('');
