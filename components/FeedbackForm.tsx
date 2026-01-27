@@ -10,17 +10,65 @@ interface FeedbackFormProps {
   isSubmitting: boolean;
 }
 
+// 圖片壓縮輔助函式
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          // 壓縮為 JPEG，品質 0.7
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        } else {
+          // Fallback if context fails
+          resolve(event.target?.result as string);
+        }
+      };
+      img.onerror = () => {
+         resolve(event.target?.result as string);
+      }
+    };
+    reader.onerror = () => resolve('');
+  });
+};
+
 export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitting }) => {
   const [userName, setUserName] = useState('');
   const [category, setCategory] = useState<FeedbackCategory>('新增功能');
   const [selectedModuleId, setSelectedModuleId] = useState<number>(SYSTEM_MODULES[0].id);
   const [selectedFeature, setSelectedFeature] = useState<string>('');
   const [description, setDescription] = useState('');
-  const [images, setImages] = useState<string[]>([]); // Store images as base64 strings
+  const [images, setImages] = useState<string[]>([]);
+  const [isProcessingImages, setIsProcessingImages] = useState(false);
 
   const currentModule = SYSTEM_MODULES.find(m => m.id === Number(selectedModuleId)) || SYSTEM_MODULES[0];
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
     const remainingSlots = MAX_IMAGES - images.length;
@@ -30,14 +78,17 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
     }
 
     const filesToProcess = files.slice(0, remainingSlots);
+    setIsProcessingImages(true);
 
-    filesToProcess.forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImages(prev => [...prev, reader.result as string]);
-      };
-      reader.readAsDataURL(file);
-    });
+    try {
+      const compressedImages = await Promise.all(filesToProcess.map(file => compressImage(file)));
+      setImages(prev => [...prev, ...compressedImages].filter(Boolean));
+    } catch (error) {
+      console.error("Image processing error", error);
+      alert("圖片處理發生錯誤");
+    } finally {
+      setIsProcessingImages(false);
+    }
   };
 
   const handleRemoveImage = (index: number) => {
@@ -46,7 +97,7 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
   
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userName.trim() || !description.trim() || isSubmitting) return;
+    if (!userName.trim() || !description.trim() || isSubmitting || isProcessingImages) return;
 
     const success = await onSubmit({
       userName,
@@ -183,16 +234,16 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
             上傳圖片 (選填，最多 {MAX_IMAGES} 張)
           </label>
           <div className="flex items-center gap-4">
-            <label className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border shadow-sm cursor-pointer ${images.length >= MAX_IMAGES ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
-              <Upload className="w-4 h-4" />
-              <span>選擇檔案</span>
+            <label className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border shadow-sm cursor-pointer ${images.length >= MAX_IMAGES || isProcessingImages ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
+              {isProcessingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>{isProcessingImages ? '處理中...' : '選擇檔案'}</span>
               <input 
                 type="file" 
                 multiple 
                 accept="image/*" 
                 className="hidden"
                 onChange={handleImageUpload}
-                disabled={images.length >= MAX_IMAGES}
+                disabled={images.length >= MAX_IMAGES || isProcessingImages}
               />
             </label>
              <p className="text-sm text-slate-500">{images.length} / {MAX_IMAGES}</p>
@@ -220,11 +271,11 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
         <div className="col-span-1 md:col-span-2 flex justify-end">
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isProcessingImages}
             className="flex items-center justify-center gap-2 w-36 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg transition-colors shadow-sm active:scale-95 transform disabled:bg-blue-300 disabled:cursor-not-allowed"
           >
-            {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {isSubmitting ? '提交中...' : '提交回饋'}
+            {(isSubmitting || isProcessingImages) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {isProcessingImages ? '處理中...' : isSubmitting ? '提交中...' : '提交回饋'}
           </button>
         </div>
       </form>

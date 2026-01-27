@@ -18,18 +18,16 @@ async function postToAction(action: string, payload: any): Promise<{ success: bo
   try {
     const response = await fetch(SCRIPT_URL, {
       method: 'POST',
-      // REMOVED: mode: 'no-cors' - This was preventing us from reading the response.
       headers: {
-        // Using 'application/json' is more standard, but 'text/plain' works fine with GAS.
-        'Content-Type': 'application/json',
+        // IMPORTANT: Use 'text/plain' for Google Apps Script to avoid CORS Preflight (OPTIONS) issues.
+        // Even though we are sending JSON, identifying it as text/plain ensures the browser sends it directly.
+        'Content-Type': 'text/plain;charset=utf-8',
       },
       body: JSON.stringify({ action, payload }),
-      // Redirect is needed because Apps Script can issue redirects
       redirect: 'follow', 
     });
 
     if (!response.ok) {
-        // The server responded with an error status code (4xx or 5xx)
         let errorMessage = `HTTP error! status: ${response.status}`;
         try {
             const errorData = await response.json();
@@ -40,7 +38,6 @@ async function postToAction(action: string, payload: any): Promise<{ success: bo
         throw new Error(errorMessage);
     }
     
-    // Apps Script in this setup returns a JSON response that we need to parse
     const result = await response.json();
 
     if (result.status === 'error') {

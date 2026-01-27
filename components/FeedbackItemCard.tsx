@@ -26,6 +26,49 @@ interface FeedbackItemCardProps {
   onUpdateDevResponse: (itemId: string, response: Omit<DevResponse, 'timestamp'>) => Promise<boolean>;
 }
 
+// 圖片壓縮輔助函式 (重複使用以保持組件獨立，實務上可提取至 utils)
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_WIDTH = 1024;
+        const MAX_HEIGHT = 1024;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        } else {
+          resolve(event.target?.result as string);
+        }
+      };
+      img.onerror = () => resolve(event.target?.result as string);
+    };
+    reader.onerror = () => resolve('');
+  });
+};
+
 // Reusable Image Thumbnails Component
 const ImageThumbnails = ({ urls }: { urls?: string[] }) => {
   if (!urls || urls.length === 0) return null;
@@ -83,13 +126,14 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
   const [commentContent, setCommentContent] = useState('');
   const [commentImages, setCommentImages] = useState<string[]>([]);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [isProcessingCommentImages, setIsProcessingCommentImages] = useState(false);
 
   // Dev Response Form State
   const [devStatus, setDevStatus] = useState<DevStatus>(item.devResponse?.status || '需更一步討論');
   const [devContent, setDevContent] = useState(item.devResponse?.content || '');
   const [isSubmittingDevResponse, setIsSubmittingDevResponse] = useState(false);
 
-  const handleCommentImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCommentImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
     const remainingSlots = MAX_IMAGES_COMMENT - commentImages.length;
@@ -97,11 +141,17 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
       alert(`您最多只能再上傳 ${remainingSlots} 張圖片。`);
     }
     const filesToProcess = files.slice(0, remainingSlots);
-    filesToProcess.forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => setCommentImages(prev => [...prev, reader.result as string]);
-      reader.readAsDataURL(file);
-    });
+    setIsProcessingCommentImages(true);
+    
+    try {
+        const compressed = await Promise.all(filesToProcess.map(f => compressImage(f)));
+        setCommentImages(prev => [...prev, ...compressed].filter(Boolean));
+    } catch (error) {
+        console.error("Compression error", error);
+        alert("圖片處理失敗");
+    } finally {
+        setIsProcessingCommentImages(false);
+    }
   };
 
   const handleRemoveCommentImage = (index: number) => {
@@ -110,7 +160,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
 
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentName.trim() || !commentContent.trim() || isSubmittingComment) return;
+    if (!commentName.trim() || !commentContent.trim() || isSubmittingComment || isProcessingCommentImages) return;
     setIsSubmittingComment(true);
     const success = await onAddComment(item.id, { 
       userName: commentName, 
@@ -290,13 +340,13 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
               rows={2}
             />
             <div className="mb-3">
-                <label className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors border text-xs cursor-pointer ${commentImages.length >= MAX_IMAGES_COMMENT ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
-                <ImageIcon className="w-3 h-3" />
-                <span>附加圖片 ({commentImages.length}/{MAX_IMAGES_COMMENT})</span>
+                <label className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md transition-colors border text-xs cursor-pointer ${commentImages.length >= MAX_IMAGES_COMMENT || isProcessingCommentImages ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}>
+                {isProcessingCommentImages ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImageIcon className="w-3 h-3" />}
+                <span>{isProcessingCommentImages ? '處理中' : `附加圖片 (${commentImages.length}/${MAX_IMAGES_COMMENT})`}</span>
                 <input 
                     type="file" multiple accept="image/*" className="hidden"
                     onChange={handleCommentImageUpload}
-                    disabled={commentImages.length >= MAX_IMAGES_COMMENT}
+                    disabled={commentImages.length >= MAX_IMAGES_COMMENT || isProcessingCommentImages}
                 />
                 </label>
             </div>
@@ -319,9 +369,9 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
             <div className="flex justify-end">
               <button 
                 type="submit" 
-                disabled={isSubmittingComment}
+                disabled={isSubmittingComment || isProcessingCommentImages}
                 className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium w-32 flex justify-center items-center disabled:bg-blue-300">
-                {isSubmittingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : '新增意見'}
+                {(isSubmittingComment || isProcessingCommentImages) ? <Loader2 className="w-4 h-4 animate-spin" /> : '新增意見'}
               </button>
             </div>
           </form>
