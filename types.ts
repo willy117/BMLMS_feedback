@@ -13,12 +13,19 @@ export interface SystemModule {
   features: string[];
 }
 
+export interface Attachment {
+  fileName: string;
+  mimeType: string;
+  content: string; // Base64 string without header
+}
+
 export interface Comment {
   id: string;
   userName: string;
   content: string;
   timestamp: number;
-  imageUrls?: string[];
+  imageUrls?: string[]; // For display (URLs)
+  attachments?: Attachment[]; // For upload (Base64 + Filename)
 }
 
 export interface DevResponse {
@@ -30,6 +37,7 @@ export interface DevResponse {
 
 export interface FeedbackItem {
   id: string;
+  displayId?: string; // Virtual ID for display (e.g. R001)
   userName: string;
   category: FeedbackCategory;
   moduleId: number;
@@ -39,7 +47,8 @@ export interface FeedbackItem {
   timestamp: number;
   comments: Comment[];
   devResponse?: DevResponse;
-  imageUrls?: string[];
+  imageUrls?: string[]; // For display (URLs)
+  attachments?: Attachment[]; // For upload (Base64 + Filename)
 }
 
 export const CATEGORIES: FeedbackCategory[] = ['新增功能', '修改建議', '問題回報', '其他'];

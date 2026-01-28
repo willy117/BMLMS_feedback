@@ -7,26 +7,28 @@ import {
   User, 
   Clock, 
   CheckCircle2, 
-  AlertCircle,
-  CornerDownRight,
-  Upload,
-  X,
-  Image as ImageIcon,
-  Loader2
+  AlertCircle, 
+  CornerDownRight, 
+  Upload, 
+  X, 
+  Image as ImageIcon, 
+  Loader2, 
+  ExternalLink, 
+  FileImage 
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { zhTW } from 'date-fns/locale/zh-TW';
-import { FeedbackItem, Comment, DevResponse, DEV_STATUSES, DevStatus, CATEGORIES } from '../types';
+import { FeedbackItem, Comment, DevResponse, DEV_STATUSES, DevStatus, CATEGORIES, Attachment } from '../types';
 
 const MAX_IMAGES_COMMENT = 3;
 
 interface FeedbackItemCardProps {
   item: FeedbackItem;
-  onAddComment: (itemId: string, comment: Omit<Comment, 'id' | 'timestamp'>) => Promise<boolean>;
+  onAddComment: (itemId: string, comment: Omit<Comment, 'id' | 'timestamp'> & { attachments: Attachment[] }) => Promise<boolean>;
   onUpdateDevResponse: (itemId: string, response: Omit<DevResponse, 'timestamp'>) => Promise<boolean>;
 }
 
-// 圖片壓縮輔助函式 (重複使用以保持組件獨立，實務上可提取至 utils)
+// 圖片壓縮輔助函式 - 優化版
 const compressImage = (file: File): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -38,8 +40,9 @@ const compressImage = (file: File): Promise<string> => {
         const canvas = document.createElement('canvas');
         let width = img.width;
         let height = img.height;
-        const MAX_WIDTH = 1024;
-        const MAX_HEIGHT = 1024;
+        // 降低最大解析度以確保 GAS 能接收
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
 
         if (width > height) {
           if (width > MAX_WIDTH) {
@@ -58,7 +61,7 @@ const compressImage = (file: File): Promise<string> => {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          resolve(canvas.toDataURL('image/jpeg', 0.6));
         } else {
           resolve(event.target?.result as string);
         }
@@ -69,30 +72,55 @@ const compressImage = (file: File): Promise<string> => {
   });
 };
 
-// 處理圖片連結：如果是純 Base64 (沒有 Header)，補上 Header 讓它能顯示
+// 處理圖片連結
 const resolveImageUrl = (url: string) => {
   if (!url) return '';
+  // 如果已經是 http 開頭 (Google Drive 連結或其他網址)，直接回傳
   if (url.startsWith('http') || url.startsWith('https')) return url;
+  // 如果是 base64 (舊資料)，保留原樣
   if (url.startsWith('data:')) return url;
-  // 假設沒有標頭的是 JPEG (因為我們的壓縮器輸出 JPEG)
+  // 如果是純 base64 字串 (無標頭)，補上標頭
   return `data:image/jpeg;base64,${url}`;
 };
 
-// Reusable Image Thumbnails Component
+// 安全的日期格式化函式
+const safeFormatDate = (timestamp: number | string | undefined) => {
+  if (!timestamp) return '';
+  try {
+    const date = new Date(Number(timestamp));
+    if (isNaN(date.getTime())) return '';
+    return format(date, 'yyyy/MM/dd HH:mm', { locale: zhTW });
+  } catch (e) {
+    return '';
+  }
+};
+
+// Image Links Component (Replaced Thumbnails)
 const ImageThumbnails = ({ urls }: { urls?: string[] }) => {
   if (!urls || urls.length === 0) return null;
 
   return (
-    <div className="mt-3 flex items-center gap-2 flex-wrap">
-      {urls.map((url, index) => (
-        <a key={index} href={resolveImageUrl(url)} target="_blank" rel="noopener noreferrer" className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:ring-2 hover:ring-blue-500 transition-all">
-          <img src={resolveImageUrl(url)} alt={`attachment-${index}`} className="w-full h-full object-cover" />
-        </a>
-      ))}
+    <div className="mt-3 flex flex-wrap gap-2">
+      {urls.map((url, index) => {
+        const resolvedUrl = resolveImageUrl(url);
+        return (
+          <a 
+            key={index}
+            href={resolvedUrl}
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-blue-600 hover:border-blue-200 transition-all group no-underline"
+            title="點擊開啟圖片"
+          >
+            <FileImage className="w-4 h-4 text-slate-400 group-hover:text-blue-500" />
+            <span className="text-sm font-medium">附件圖片 {index + 1}</span>
+            <ExternalLink className="w-3 h-3 opacity-50 group-hover:opacity-100" />
+          </a>
+        );
+      })}
     </div>
   );
 };
-
 
 const CategoryBadge = ({ category }: { category: string }) => {
   const styles: Record<string, string> = {
@@ -144,7 +172,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
 
   const handleCommentImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
-    const files = Array.from(e.target.files);
+    const files = Array.from(e.target.files) as File[];
     const remainingSlots = MAX_IMAGES_COMMENT - commentImages.length;
     if (files.length > remainingSlots) {
       alert(`您最多只能再上傳 ${remainingSlots} 張圖片。`);
@@ -172,18 +200,27 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
     if (!commentName.trim() || !commentContent.trim() || isSubmittingComment || isProcessingCommentImages) return;
     setIsSubmittingComment(true);
 
-    // 關鍵修正：移除 Base64 標頭
-    const processedImages = commentImages.map(img => {
-      if (img.includes(',')) {
-        return img.split(',')[1];
-      }
-      return img;
+    // 處理圖片附件與命名
+    // 命名原則：YYYYMMDD_R{ID}_R{Sequence}
+    // 注意：這裡使用 item.displayId (如 R001) 作為檔名中間的 ID
+    const dateStr = format(new Date(), 'yyyyMMdd');
+    const displayId = item.displayId || `R${String(item.id).substring(0, 6)}`; // Fallback if no displayId
+
+    const attachments: Attachment[] = commentImages.map((img, index) => {
+      const content = img.includes(',') ? img.split(',')[1] : img;
+      return {
+        fileName: `${dateStr}_${displayId}_R${index + 1}.jpg`,
+        mimeType: 'image/jpeg',
+        content: content
+      };
     });
+
+    console.log(`Submitting comment with ${attachments.length} attachments. ID used: ${displayId}`);
 
     const success = await onAddComment(item.id, { 
       userName: commentName, 
       content: commentContent, 
-      imageUrls: processedImages 
+      attachments, // 傳送附件物件
     });
     if (success) {
       setCommentContent('');
@@ -210,8 +247,9 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
       <div className="p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-3">
           <div className="flex items-center gap-3 flex-wrap">
+             {/* ID Badge: Show simplified Display ID if available, otherwise simplified UUID */}
              <span className="font-mono text-sm bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md font-semibold">
-                #{String(item.id).padStart(3, '0')}
+                {item.displayId || `R${String(item.id).substring(0, 4)}..`}
              </span>
              <CategoryBadge category={item.category} />
              <div className="text-sm text-slate-500 flex items-center gap-1 bg-slate-50 px-2 py-1 rounded">
@@ -236,7 +274,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
             </span>
             <span className="flex items-center gap-1">
               <Clock className="w-4 h-4" />
-              {format(item.timestamp, 'yyyy/MM/dd HH:mm', { locale: zhTW })}
+              {safeFormatDate(item.timestamp)}
             </span>
           </div>
           
@@ -274,7 +312,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
               <div className="flex justify-between items-start mb-2">
                 <StatusBadge status={item.devResponse.status} />
                 <span className="text-xs text-slate-400">
-                  {format(new Date(item.devResponse.timestamp), 'yyyy/MM/dd HH:mm')}
+                  {safeFormatDate(item.devResponse.timestamp)}
                 </span>
               </div>
               <p className="text-slate-700 whitespace-pre-wrap">{item.devResponse.content}</p>
@@ -329,7 +367,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
                     <div className="flex justify-between items-center mb-1">
                       <span className="font-semibold text-sm text-slate-700">{comment.userName}</span>
                       <span className="text-xs text-slate-400">
-                        {format(new Date(comment.timestamp), 'yyyy/MM/dd HH:mm')}
+                        {safeFormatDate(comment.timestamp)}
                       </span>
                     </div>
                     <p className="text-slate-600 text-sm">{comment.content}</p>

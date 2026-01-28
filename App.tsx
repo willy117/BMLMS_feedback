@@ -5,13 +5,13 @@ import { FeedbackForm } from './components/FeedbackForm';
 import { FeedbackStats } from './components/FeedbackStats';
 import { FeedbackItemCard } from './components/FeedbackItemCard';
 import { SystemNotice } from './components/SystemNotice';
-import { FeedbackItem, Comment, DevResponse, CATEGORIES } from './types';
+import { FeedbackItem, Comment, DevResponse, CATEGORIES, Attachment } from './types';
 import { SYSTEM_MODULES } from './constants';
 
 // !!! =============================================================== !!!
 // !!!  請將 'YOUR_GOOGLE_APPS_SCRIPT_URL' 換成您部署後取得的網址   !!!
 // !!! =============================================================== !!!
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwj3KYSEUeeJvohd6inwnx6wqJcXhFAEy9fDtG8WhhrLHCQCPMBNYgveNkGsOFMQdZ11Q/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzVo3Z7DNMzoTOAKRCXRiC21yxn0PvNrM4RtxHLR_7X6fIbY0XagHlXVeIe5xnxjqlGJg/exec';
 
 // Helper function for API calls
 async function postToAction(action: string, payload: any): Promise<{ success: boolean; error?: any; data?: any }> {
@@ -64,7 +64,7 @@ function AppContent() {
   const [filterModule, setFilterModule] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 取得資料
+  // 取得資料並計算顯示用 ID
   const fetchFeedbackData = useCallback(async () => {
     // Don't set loading to true on refetch, to avoid screen flicker
     setError(null);
@@ -73,8 +73,23 @@ function AppContent() {
       if (!response.ok) {
         throw new Error('無法從後端讀取資料，請檢查 Apps Script 部署設定與權限。');
       }
-      const data = await response.json();
-      setFeedbackItems(Array.isArray(data) ? data : []);
+      const rawData = await response.json();
+      
+      if (Array.isArray(rawData)) {
+        // 1. Sort by timestamp ascending (Oldest first) to assign IDs
+        const sortedData = [...rawData].sort((a, b) => a.timestamp - b.timestamp);
+        
+        // 2. Assign Display ID (R001, R002...)
+        const dataWithIds = sortedData.map((item, index) => ({
+          ...item,
+          displayId: `R${String(index + 1).padStart(3, '0')}`
+        }));
+        
+        // 3. Sort by timestamp descending (Newest first) for display
+        setFeedbackItems(dataWithIds.reverse());
+      } else {
+        setFeedbackItems([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '發生未知的錯誤');
     } finally {
@@ -87,14 +102,12 @@ function AppContent() {
   }, [fetchFeedbackData]);
 
   // Handlers
-  const handleAddFeedback = async (newItem: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'>): Promise<boolean> => {
+  const handleAddFeedback = async (newItem: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'> & { attachments: Attachment[] }): Promise<boolean> => {
     const item = { ...newItem, timestamp: Date.now() };
     
-    // Now we can correctly check the success status
     const { success, error } = await postToAction('addFeedback', item);
 
     if (success) {
-      // Short delay to give sheet a moment to process, then refetch data
       setTimeout(() => fetchFeedbackData(), 1500); 
     } else {
       alert(`提交失敗：${error}`);
@@ -102,13 +115,37 @@ function AppContent() {
     return success;
   };
 
-  const handleAddComment = async (itemId: string, newComment: Omit<Comment, 'id' | 'timestamp'>): Promise<boolean> => {
+  const handleAddComment = async (itemId: string, newComment: Omit<Comment, 'id' | 'timestamp'> & { attachments?: Attachment[] }): Promise<boolean> => {
+    // Find the item to get its displayId for file naming
+    const targetItem = feedbackItems.find(i => i.id === itemId);
+    const displayId = targetItem?.displayId || 'UNKNOWN';
+
+    // Rename attachments using the Display ID if they exist
+    // Expected format: YYYYMMDD_R001_R1
+    let processedAttachments = newComment.attachments;
+    if (processedAttachments && processedAttachments.length > 0) {
+        const dateStr = newComment.attachments![0].fileName.split('_')[0]; // Extract date part or regenerate
+        processedAttachments = processedAttachments.map((att, index) => {
+            // Re-construct filename with correct Display ID
+            // Assuming att.fileName was temporarily generated as ..._R{ID}_... in FeedbackItemCard
+            // We replace the middle part with the actual displayId
+            const parts = att.fileName.split('_'); 
+            // parts[0] is Date, parts[1] might be R{ID} placeholder, parts[2] is Sequence
+            // We force parts[1] to be displayId
+            const newName = `${parts[0]}_${displayId}_${parts[2] || `R${index+1}.jpg`}`;
+            return { ...att, fileName: newName };
+        });
+    }
+
     const comment: Comment = {
       ...newComment,
       id: crypto.randomUUID(),
       timestamp: Date.now(),
+      userName: newComment.userName,
+      content: newComment.content
     };
-     const payload = { ...comment, feedbackId: itemId, commentId: comment.id };
+    
+     const payload = { ...comment, feedbackId: itemId, commentId: comment.id, attachments: processedAttachments };
     
     const { success, error } = await postToAction('addComment', payload);
     if (success) {
@@ -142,7 +179,8 @@ function AppContent() {
     const matchesSearch = searchTerm === '' || 
       item.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.userName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.moduleName.toLowerCase().includes(searchTerm.toLowerCase());
+      item.moduleName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (item.displayId && item.displayId.toLowerCase().includes(searchTerm.toLowerCase())); // Search by ID
       
     return matchesCategory && matchesModule && matchesSearch;
   });
@@ -208,7 +246,7 @@ function AppContent() {
   const HomePage = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmitFeedback = async (newItem: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'>) => {
+    const handleSubmitFeedback = async (newItem: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'> & { attachments: Attachment[] }) => {
         setIsSubmitting(true);
         const success = await handleAddFeedback(newItem);
         setIsSubmitting(false);

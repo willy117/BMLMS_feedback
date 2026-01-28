@@ -1,16 +1,17 @@
-import React, { useState } from 'react';
-import { PlusCircle, Send, ChevronDown, Upload, X, Loader2 } from 'lucide-react';
-import { CATEGORIES, FeedbackCategory, FeedbackItem } from '../types';
+import React, { useState, useRef } from 'react';
+import { PlusCircle, Send, ChevronDown, Upload, X, Loader2, ImagePlus } from 'lucide-react';
+import { format } from 'date-fns';
+import { CATEGORIES, FeedbackCategory, FeedbackItem, Attachment } from '../types';
 import { SYSTEM_MODULES } from '../constants';
 
 const MAX_IMAGES = 5;
 
 interface FeedbackFormProps {
-  onSubmit: (item: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'>) => Promise<boolean | void>;
+  onSubmit: (item: Omit<FeedbackItem, 'id' | 'timestamp' | 'comments'> & { attachments: Attachment[] }) => Promise<boolean | void>;
   isSubmitting: boolean;
 }
 
-// 圖片壓縮輔助函式
+// 圖片壓縮輔助函式 - 優化版
 const compressImage = (file: File): Promise<string> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -22,8 +23,9 @@ const compressImage = (file: File): Promise<string> => {
         const canvas = document.createElement('canvas');
         let width = img.width;
         let height = img.height;
-        const MAX_WIDTH = 1024;
-        const MAX_HEIGHT = 1024;
+        // 降低最大解析度以確保 GAS 能接收 (600px 對於一般回報已足夠，且能大幅提升成功率)
+        const MAX_WIDTH = 600;
+        const MAX_HEIGHT = 600;
 
         if (width > height) {
           if (width > MAX_WIDTH) {
@@ -42,10 +44,9 @@ const compressImage = (file: File): Promise<string> => {
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(img, 0, 0, width, height);
-          // 壓縮為 JPEG，品質 0.7
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          // 降低品質至 0.5，大幅減少 Base64 字串長度
+          resolve(canvas.toDataURL('image/jpeg', 0.5));
         } else {
-          // Fallback if context fails
           resolve(event.target?.result as string);
         }
       };
@@ -65,19 +66,28 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
   const [description, setDescription] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isProcessingImages, setIsProcessingImages] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentModule = SYSTEM_MODULES.find(m => m.id === Number(selectedModuleId)) || SYSTEM_MODULES[0];
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    const files = Array.from(e.target.files);
-    const remainingSlots = MAX_IMAGES - images.length;
+  // 統一處理檔案 (來自 Input, Drop, Paste)
+  const processFiles = async (files: File[]) => {
+    const imageFiles = files.filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) return;
 
-    if (files.length > remainingSlots) {
-      alert(`您最多只能再上傳 ${remainingSlots} 張圖片。`);
+    const remainingSlots = MAX_IMAGES - images.length;
+    
+    if (remainingSlots <= 0) {
+       alert(`圖片數量已達上限 (${MAX_IMAGES} 張)`);
+       return;
     }
 
-    const filesToProcess = files.slice(0, remainingSlots);
+    if (imageFiles.length > remainingSlots) {
+      alert(`您最多只能再上傳 ${remainingSlots} 張圖片，多餘的檔案將被忽略。`);
+    }
+
+    const filesToProcess = imageFiles.slice(0, remainingSlots);
     setIsProcessingImages(true);
 
     try {
@@ -91,6 +101,44 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    processFiles(Array.from(e.target.files));
+    // Reset value so same file can be selected again if needed
+    e.target.value = '';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!isProcessingImages && images.length < MAX_IMAGES) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (isProcessingImages || images.length >= MAX_IMAGES) return;
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    // 如果正在處理或滿了，忽略
+    if (isProcessingImages || images.length >= MAX_IMAGES) return;
+
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+      processFiles(Array.from(e.clipboardData.files));
+    }
+  };
+
   const handleRemoveImage = (index: number) => {
     setImages(prev => prev.filter((_, i) => i !== index));
   };
@@ -99,14 +147,22 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
     e.preventDefault();
     if (!userName.trim() || !description.trim() || isSubmitting || isProcessingImages) return;
 
-    // 關鍵修正：在傳送給後端前，移除 Base64 的標頭 (data:image/jpeg;base64,)
-    // 這能避免 Google Apps Script 的 Utilities.base64Decode 發生錯誤
-    const processedImages = images.map(img => {
-      if (img.includes(',')) {
-        return img.split(',')[1];
-      }
-      return img;
+    // 處理附件與檔名
+    // 命名原則：YYYYMMDD_R{ID}_{Sequence}
+    // 由於此時還未取得 ID，前端使用 'RID' 作為佔位符，後端 GAS 需在生成 ID (例如 001) 後將 'RID' 替換為 'R001'
+    // 範例結果：20260128_RID_1.jpg -> (Backend) -> 20260128_R001_1.jpg
+    const dateStr = format(new Date(), 'yyyyMMdd');
+    const attachments: Attachment[] = images.map((img, index) => {
+      const content = img.includes(',') ? img.split(',')[1] : img;
+      return {
+        fileName: `${dateStr}_RID_${index + 1}.jpg`,
+        mimeType: 'image/jpeg',
+        content: content
+      };
     });
+    
+    // Debug: 確認送出前的圖片資料大小
+    console.log(`Submitting ${attachments.length} attachments.`);
 
     const success = await onSubmit({
       userName,
@@ -115,17 +171,15 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
       moduleName: currentModule.name,
       featureName: selectedFeature,
       description,
-      imageUrls: processedImages,
+      attachments, // 傳送附件物件陣列
     });
 
     if (success) {
-      // Reset form on successful submission
       setDescription('');
       setSelectedFeature('');
       setSelectedModuleId(SYSTEM_MODULES[0].id);
       setCategory('新增功能');
       setImages([]);
-      // Keep name for convenience
     }
   };
 
@@ -231,42 +285,75 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({ onSubmit, isSubmitti
             required
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            onPaste={handlePaste}
             rows={4}
             className="w-full bg-white text-black px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none placeholder:text-slate-400"
-            placeholder="請詳細描述您的建議或遇到的問題..."
+            placeholder="請詳細描述您的建議或遇到的問題... (支援 Ctrl+V 貼上圖片)"
           />
         </div>
 
-        {/* Image Upload */}
+        {/* Image Upload Area with Drag & Drop */}
         <div className="col-span-1 md:col-span-2">
           <label className="block text-sm font-medium text-slate-700 mb-1">
             上傳圖片 (選填，最多 {MAX_IMAGES} 張)
           </label>
-          <div className="flex items-center gap-4">
-            <label className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border shadow-sm cursor-pointer ${images.length >= MAX_IMAGES || isProcessingImages ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}>
-              {isProcessingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              <span>{isProcessingImages ? '處理中...' : '選擇檔案'}</span>
-              <input 
-                type="file" 
-                multiple 
-                accept="image/*" 
-                className="hidden"
-                onChange={handleImageUpload}
-                disabled={images.length >= MAX_IMAGES || isProcessingImages}
-              />
-            </label>
-             <p className="text-sm text-slate-500">{images.length} / {MAX_IMAGES}</p>
+          
+          <div 
+            className={`
+              relative border-2 border-dashed rounded-lg p-6 transition-all text-center
+              ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50 hover:bg-slate-100'}
+              ${(images.length >= MAX_IMAGES || isProcessingImages) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+            `}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input 
+              ref={fileInputRef}
+              type="file" 
+              multiple 
+              accept="image/*" 
+              className="hidden"
+              onChange={handleFileChange}
+              disabled={images.length >= MAX_IMAGES || isProcessingImages}
+            />
+            
+            <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
+              {isProcessingImages ? (
+                <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+              ) : (
+                <div className="p-3 bg-white rounded-full shadow-sm">
+                   <Upload className={`w-6 h-6 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
+                </div>
+              )}
+              
+              <div className="text-sm">
+                 {isProcessingImages ? (
+                   <span className="text-blue-600 font-medium">圖片處理中...</span>
+                 ) : (
+                   <>
+                     <span className="font-medium text-blue-600 hover:underline">點擊上傳</span>
+                     <span> 或將圖片拖曳至此</span>
+                   </>
+                 )}
+              </div>
+              <p className="text-xs text-slate-400">
+                支援 Ctrl+V 貼上 • {images.length} / {MAX_IMAGES}
+              </p>
+            </div>
           </div>
+
            {/* Image Previews */}
           {images.length > 0 && (
-            <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 gap-3">
+            <div className="mt-4 grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 gap-3 animate-fadeIn">
               {images.map((img, index) => (
                 <div key={index} className="relative group aspect-square">
-                  <img src={img} alt={`preview ${index}`} className="w-full h-full object-cover rounded-lg border border-slate-200"/>
+                  <img src={img} alt={`preview ${index}`} className="w-full h-full object-cover rounded-lg border border-slate-200 shadow-sm"/>
                   <button
                     type="button"
-                    onClick={() => handleRemoveImage(index)}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => { e.stopPropagation(); handleRemoveImage(index); }}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-80 hover:opacity-100 shadow-sm transition-all hover:scale-110"
                     aria-label="Remove image"
                   >
                     <X className="w-3 h-3" />

@@ -12,7 +12,7 @@ export const SystemNotice: React.FC = () => {
           <div>
             <h3 className="text-blue-800 font-bold text-lg mb-1">系統公告</h3>
             <p className="text-blue-700 text-sm md:text-base">
-              感謝您的回饋！所有提交的內容均會記錄至後端資料庫，開發團隊將會定期檢視。
+              該網頁僅為前端測試使用，並無串接任何資料庫
             </p>
           </div>
         </div>
