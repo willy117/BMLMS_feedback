@@ -19,6 +19,7 @@ import {
 import { format } from 'date-fns';
 import { zhTW } from 'date-fns/locale/zh-TW';
 import { FeedbackItem, Comment, DevResponse, DEV_STATUSES, DevStatus, CATEGORIES, Attachment } from '../types';
+import { SYSTEM_MODULES } from '../constants';
 
 const MAX_IMAGES_COMMENT = 3;
 
@@ -85,13 +86,25 @@ const resolveImageUrl = (url: string) => {
 
 // 安全的日期格式化函式
 const safeFormatDate = (timestamp: number | string | undefined) => {
-  if (!timestamp) return '';
+  if (!timestamp && timestamp !== 0) return '日期錯誤';
   try {
-    const date = new Date(Number(timestamp));
-    if (isNaN(date.getTime())) return '';
-    return format(date, 'yyyy/MM/dd HH:mm', { locale: zhTW });
+    const num = Number(timestamp);
+    if (isNaN(num)) return '日期錯誤';
+    
+    // 如果時間戳記小於 2000 年 (包括 0)，通常代表資料錯位或未正確寫入
+    // 但為了讓使用者除錯，我們顯示它，但標記顏色可能會不同(由外部CSS控制)
+    // 這裡只負責輸出字串
+    if (num < 946684800000) { 
+       // 資料錯位時，Timestamp 往往會變成 0 或其他奇怪的數字
+       // 為了回應您的要求「我要記錄時間」，我們還是格式化它，但如果是 1970/01/01 08:00 (台灣時區)
+       // 這代表後端沒收到時間。
+       const date = new Date(num);
+       return format(date, 'yyyy/MM/dd HH:mm', { locale: zhTW });
+    }
+
+    return format(new Date(num), 'yyyy/MM/dd HH:mm', { locale: zhTW });
   } catch (e) {
-    return '';
+    return '日期錯誤';
   }
 };
 
@@ -169,6 +182,10 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
   const [devStatus, setDevStatus] = useState<DevStatus>(item.devResponse?.status || '需更一步討論');
   const [devContent, setDevContent] = useState(item.devResponse?.content || '');
   const [isSubmittingDevResponse, setIsSubmittingDevResponse] = useState(false);
+
+  // Determine Module Name display
+  const systemModule = SYSTEM_MODULES.find(m => m.id === Number(item.moduleId));
+  const displayModuleName = systemModule ? systemModule.name : item.moduleName;
 
   const handleCommentImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -253,7 +270,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
              </span>
              <CategoryBadge category={item.category} />
              <div className="text-sm text-slate-500 flex items-center gap-1 bg-slate-50 px-2 py-1 rounded">
-               <span className="font-semibold text-slate-700">{item.moduleName}</span>
+               <span className="font-semibold text-slate-700">{displayModuleName}</span>
                {item.featureName && <>
                  <span className="text-slate-300">/</span>
                  <span>{item.featureName}</span>
@@ -272,7 +289,7 @@ export const FeedbackItemCard: React.FC<FeedbackItemCardProps> = ({ item, onAddC
               <User className="w-4 h-4" />
               {item.userName}
             </span>
-            <span className="flex items-center gap-1">
+            <span className={`flex items-center gap-1 ${Number(item.timestamp) < 946684800000 ? 'text-red-400' : ''}`} title={Number(item.timestamp) < 946684800000 ? '時間資料異常 (請檢查 Google Sheet 欄位)' : ''}>
               <Clock className="w-4 h-4" />
               {safeFormatDate(item.timestamp)}
             </span>
